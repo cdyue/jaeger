@@ -111,7 +111,8 @@ func NewAPIHandler(queryService *querysvc.QueryService, options ...HandlerOption
 func (aH *APIHandler) RegisterRoutes(router *mux.Router) {
 	aH.handleFunc(router, aH.getTrace, "/traces/{%s}", traceIDParam).Methods(http.MethodGet)
 	aH.handleFunc(router, aH.archiveTrace, "/archive/{%s}", traceIDParam).Methods(http.MethodPost)
-	aH.handleFunc(router, aH.search, "/traces").Methods(http.MethodGet)
+	// aH.handleFunc(router, aH.search, "/traces").Methods(http.MethodGet)
+	aH.handleFunc(router, aH.searchForMultitenancy, "/traces").Methods(http.MethodGet)
 	aH.handleFunc(router, aH.getServices, "/services").Methods(http.MethodGet)
 	// TODO change the UI to use this endpoint. Requires ?service= parameter.
 	aH.handleFunc(router, aH.getOperations, "/operations").Methods(http.MethodGet)
