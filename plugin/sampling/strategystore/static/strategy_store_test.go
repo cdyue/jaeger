@@ -15,12 +15,16 @@
 package static
 
 import (
-	"fmt"
+	"io/ioutil"
+	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/jaegertracing/jaeger/pkg/testutils"
 	"github.com/jaegertracing/jaeger/thrift-gen/sampling"
@@ -28,11 +32,11 @@ import (
 
 func TestStrategyStore(t *testing.T) {
 	_, err := NewStrategyStore(Options{StrategiesFile: "fileNotFound.json"}, zap.NewNop())
-	assert.EqualError(t, err, "Failed to open strategies file: open fileNotFound.json: no such file or directory")
+	assert.EqualError(t, err, "failed to open strategies file: open fileNotFound.json: no such file or directory")
 
 	_, err = NewStrategyStore(Options{StrategiesFile: "fixtures/bad_strategies.json"}, zap.NewNop())
 	assert.EqualError(t, err,
-		"Failed to unmarshal strategies: json: cannot unmarshal string into Go value of type static.strategies")
+		"failed to unmarshal strategies: json: cannot unmarshal string into Go value of type static.strategies")
 
 	// Test default strategy
 	logger, buf := testutils.NewLogger()
@@ -79,7 +83,7 @@ func TestPerOperationSamplingStrategies(t *testing.T) {
 	os := s.OperationSampling
 	assert.EqualValues(t, os.DefaultSamplingProbability, 0.8)
 	require.Len(t, os.PerOperationStrategies, 4)
-	fmt.Println(os)
+
 	assert.Equal(t, "op6", os.PerOperationStrategies[0].Operation)
 	assert.EqualValues(t, 0.5, os.PerOperationStrategies[0].ProbabilisticSampling.SamplingRate)
 	assert.Equal(t, "op1", os.PerOperationStrategies[1].Operation)
@@ -239,7 +243,96 @@ func TestDeepCopy(t *testing.T) {
 			SamplingRate: 0.5,
 		},
 	}
-	copy := deepCopy(s)
-	assert.False(t, copy == s)
-	assert.EqualValues(t, copy, s)
+	cp := deepCopy(s)
+	assert.False(t, cp == s)
+	assert.EqualValues(t, cp, s)
+}
+
+func TestAutoUpdateStrategy(t *testing.T) {
+	tempFile, _ := ioutil.TempFile("", "for_go_test_*.json")
+	require.NoError(t, tempFile.Close())
+	defer func() {
+		require.NoError(t, os.Remove(tempFile.Name()))
+	}()
+
+	// copy known fixture content into temp file which we can later overwrite
+	srcFile, dstFile := "fixtures/strategies.json", tempFile.Name()
+	srcBytes, err := ioutil.ReadFile(srcFile)
+	require.NoError(t, err)
+	require.NoError(t, ioutil.WriteFile(dstFile, srcBytes, 0644))
+
+	ss, err := NewStrategyStore(Options{
+		StrategiesFile: dstFile,
+		ReloadInterval: time.Millisecond * 10,
+	}, zap.NewNop())
+	require.NoError(t, err)
+	store := ss.(*strategyStore)
+	defer store.Close()
+
+	// confirm baseline value
+	s, err := store.GetSamplingStrategy("foo")
+	require.NoError(t, err)
+	assert.EqualValues(t, makeResponse(sampling.SamplingStrategyType_PROBABILISTIC, 0.8), *s)
+
+	// verify that reloading in no-op
+	value := store.reloadSamplingStrategyFile(dstFile, string(srcBytes))
+	assert.Equal(t, string(srcBytes), value)
+
+	// update file with new probability of 0.9
+	newStr := strings.Replace(string(srcBytes), "0.8", "0.9", 1)
+	require.NoError(t, ioutil.WriteFile(dstFile, []byte(newStr), 0644))
+
+	// wait for reload timer
+	for i := 0; i < 1000; i++ { // wait up to 1sec
+		s, err = store.GetSamplingStrategy("foo")
+		require.NoError(t, err)
+		if s.ProbabilisticSampling != nil && s.ProbabilisticSampling.SamplingRate == 0.9 {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+	assert.EqualValues(t, makeResponse(sampling.SamplingStrategyType_PROBABILISTIC, 0.9), *s)
+}
+
+func TestAutoUpdateStrategyErrors(t *testing.T) {
+	tempFile, _ := ioutil.TempFile("", "for_go_test_*.json")
+	require.NoError(t, tempFile.Close())
+	defer func() {
+		_ = os.Remove(tempFile.Name())
+	}()
+
+	zapCore, logs := observer.New(zap.InfoLevel)
+	logger := zap.New(zapCore)
+
+	s, err := NewStrategyStore(Options{
+		StrategiesFile: "fixtures/strategies.json",
+		ReloadInterval: time.Hour,
+	}, logger)
+	require.NoError(t, err)
+	store := s.(*strategyStore)
+	defer store.Close()
+
+	// check invalid file path or read failure
+	assert.Equal(t, "blah", store.reloadSamplingStrategyFile(tempFile.Name()+"bad-path", "blah"))
+	assert.Len(t, logs.FilterMessage("failed to load sampling strategies").All(), 1)
+
+	// check bad file content
+	require.NoError(t, ioutil.WriteFile(tempFile.Name(), []byte("bad value"), 0644))
+	assert.Equal(t, "blah", store.reloadSamplingStrategyFile(tempFile.Name(), "blah"))
+	assert.Len(t, logs.FilterMessage("failed to update sampling strategies from file").All(), 1)
+}
+
+func TestServiceNoPerOperationStrategies(t *testing.T) {
+	store, err := NewStrategyStore(Options{StrategiesFile: "fixtures/service_no_per_operation.json"}, zap.NewNop())
+	require.NoError(t, err)
+
+	s, err := store.GetSamplingStrategy("ServiceA")
+	require.NoError(t, err)
+	assert.Equal(t, 1.0, s.OperationSampling.DefaultSamplingProbability)
+
+	s, err = store.GetSamplingStrategy("ServiceB")
+	require.NoError(t, err)
+
+	expected := makeResponse(sampling.SamplingStrategyType_RATE_LIMITING, 3)
+	assert.Equal(t, *expected.RateLimitingSampling, *s.RateLimitingSampling)
 }

@@ -1,7 +1,7 @@
 Changes by Version
 ==================
 
-1.17.0 (unreleased)
+1.19.0 (unreleased)
 ------------------
 
 ### Backend Changes
@@ -11,8 +11,139 @@ Changes by Version
 #### New Features
 
 #### Bug fixes, Minor Improvements
+* Add arm64 support for binaries and make architecture configurable in docker images. ([#2176](https://github.com/jaegertracing/jaeger/pull/2176), [@MrXinWang](https://github.com/MrXinWang))
 
 ### UI Changes
+
+1.18.0 (2020-05-14)
+------------------
+
+### Backend Changes
+
+#### Breaking Changes
+
+* Remove Tchannel between agent and collector ([#2115](https://github.com/jaegertracing/jaeger/pull/2115), [#2112](https://github.com/jaegertracing/jaeger/pull/2112), [@pavolloffay](https://github.com/pavolloffay))
+    
+    Remove `Tchannel` port (14267) from collector and `Tchannel` reporter from agent. 
+
+    These flags were removed from agent:
+    ```
+    --collector.host-port
+    --reporter.tchannel.discovery.conn-check-timeout
+    --reporter.tchannel.discovery.min-peers
+    --reporter.tchannel.host-port
+    --reporter.tchannel.report-timeout
+    ```
+
+    These flags were removed from collector:
+    ```
+    --collector.port
+    ```
+
+* Normalize CLI flags to use host:port addresses ([#1827](https://github.com/jaegertracing/jaeger/pull/1827), [@annanay25](https://github.com/annanay25))
+
+  Flags previously accepting listen addresses in any other format have been deprecated:
+
+  * `collector.port` is superseded by `collector.tchan-server.host-port`
+  * `collector.http-port` is superseded by `collector.http-server.host-port`
+  * `collector.grpc-port` is superseded by `collector.grpc-server.host-port`
+  * `collector.zipkin.http-port` is superseded by `collector.zipkin.host-port`
+  * `admin-http-port` is superseded by `admin.http.host-port`
+
+#### New Features
+
+* Add grpc storage plugin OTEL exporter ([#2229](https://github.com/jaegertracing/jaeger/pull/2229), [@pavolloffay](https://github.com/pavolloffay))
+* Add OTEL ingester component ([#2225](https://github.com/jaegertracing/jaeger/pull/2225), [@pavolloffay](https://github.com/pavolloffay))
+* Add Kafka OTEL receiver/ingester ([#2221](https://github.com/jaegertracing/jaeger/pull/2221), [@pavolloffay](https://github.com/pavolloffay))
+* Create Jaeger OTEL agent component  ([#2216](https://github.com/jaegertracing/jaeger/pull/2216), [@pavolloffay](https://github.com/pavolloffay))
+* Merge hardcoded/default configuration with OTEL config file ([#2211](https://github.com/jaegertracing/jaeger/pull/2211), [@pavolloffay](https://github.com/pavolloffay))
+* Support periodic refresh of sampling strategies ([#2188](https://github.com/jaegertracing/jaeger/pull/2188), [@defool](https://github.com/defool))
+* Add Elasticsearch OTEL exporter ([#2140](https://github.com/jaegertracing/jaeger/pull/2140), [@pavolloffay](https://github.com/pavolloffay))
+* Add Cassandra OTEL exporter ([#2139](https://github.com/jaegertracing/jaeger/pull/2139), [@pavolloffay](https://github.com/pavolloffay))
+* Add Kafka OTEL storage exporter ([#2135](https://github.com/jaegertracing/jaeger/pull/2135), [@pavolloffay](https://github.com/pavolloffay))
+* Clock skew config ([#2119](https://github.com/jaegertracing/jaeger/pull/2119), [@joe-elliott](https://github.com/joe-elliott))
+* Introduce OpenTelemetry collector ([#2086](https://github.com/jaegertracing/jaeger/pull/2086), [@pavolloffay](https://github.com/pavolloffay))
+* Support regex tags search for Elasticseach backend ([#2049](https://github.com/jaegertracing/jaeger/pull/2049), [@annanay25](https://github.com/annanay25))
+
+#### Bug fixes, Minor Improvements
+
+* Do not skip service/operation indexing for firehose spans ([#2242](https://github.com/jaegertracing/jaeger/pull/2242), [@yurishkuro](https://github.com/yurishkuro))
+* Add build information to OTEL binaries ([#2237](https://github.com/jaegertracing/jaeger/pull/2237), [@pavolloffay](https://github.com/pavolloffay))
+* Enable service default sampling param ([#2230](https://github.com/jaegertracing/jaeger/pull/2230), [@defool](https://github.com/defool))
+* Add Jaeger OTEL agent to docker image upload ([#2227](https://github.com/jaegertracing/jaeger/pull/2227), [@ning2008wisc](https://github.com/ning2008wisc))
+* Support adding process tags in OTEL via env variable ([#2220](https://github.com/jaegertracing/jaeger/pull/2220), [@pavolloffay](https://github.com/pavolloffay))
+* Bump OTEL version and update exporters to use new API ([#2196](https://github.com/jaegertracing/jaeger/pull/2196), [@pavolloffay](https://github.com/pavolloffay))
+* Support sampling startegies file flag in OTEL collector ([#2195](https://github.com/jaegertracing/jaeger/pull/2195), [@pavolloffay](https://github.com/pavolloffay))
+* Add zipkin receiver to OTEL collector ([#2181](https://github.com/jaegertracing/jaeger/pull/2181), [@pavolloffay](https://github.com/pavolloffay))
+* Add Dockerfile for OTEL collector and publish latest tag ([#2167](https://github.com/jaegertracing/jaeger/pull/2167), [@pavolloffay](https://github.com/pavolloffay))
+* Run OTEL collector without configuration file ([#2148](https://github.com/jaegertracing/jaeger/pull/2148), [@pavolloffay](https://github.com/pavolloffay))
+* Update gocql to support AWS MCS ([#2133](https://github.com/jaegertracing/jaeger/pull/2133), [@johanneswuerbach](https://github.com/johanneswuerbach))
+* Return appropriate gRPC errors/codes to indicate request status ([#2132](https://github.com/jaegertracing/jaeger/pull/2132), [@yurishkuro](https://github.com/yurishkuro))
+* Remove tchannel port from dockerfile and test ([#2118](https://github.com/jaegertracing/jaeger/pull/2118), [@pavolloffay](https://github.com/pavolloffay))
+* Remove tchannel between agent and collector ([#2115](https://github.com/jaegertracing/jaeger/pull/2115), [@pavolloffay](https://github.com/pavolloffay))
+* Move all tchannel packages to a single top level package ([#2112](https://github.com/jaegertracing/jaeger/pull/2112), [@pavolloffay](https://github.com/pavolloffay))
+
+### UI Changes
+
+* UI pinned to version 1.9.0. The changelog is available here [v1.9.0](https://github.com/jaegertracing/jaeger-ui/blob/master/CHANGELOG.md#v190-may-14-2020)
+
+1.17.1 (2020-03-13)
+------------------
+
+#### Bug fixes, Minor Improvements
+
+* Fix enable Kafka TLS when TLS auth is specified [#2107](https://github.com/jaegertracing/jaeger/pull/2107), [@pavolloffay](https://github.com/pavoloffay))
+* Migrate project to go modules [#2098](https://github.com/jaegertracing/jaeger/pull/2098), [@pavolloffay](https://github.com/pavoloffay))
+* Do not skip service/operation indexing for firehose spans [#2090](https://github.com/jaegertracing/jaeger/pull/2090), [@yurishkuro](https://github.com/yurishkuro))
+* Close the span writer on main ([#2096](https://github.com/jaegertracing/jaeger/pull/2096), [@jpkrohling](https://github.com/jpkrohling))
+* Improved graceful shutdown - Collector ([#2076](https://github.com/jaegertracing/jaeger/pull/2076), [@jpkrohling](https://github.com/jpkrohling))
+* Improved graceful shutdown - Agent ([#2031](https://github.com/jaegertracing/jaeger/pull/2031), [@jpkrohling](https://github.com/jpkrohling))
+
+### UI Changes
+
+* UI pinned to version 1.8.0. The changelog is available here [v1.8.0](https://github.com/jaegertracing/jaeger-ui/blob/master/CHANGELOG.md#v180-march-12-2020)
+
+1.17.0 (2020-02-24)
+------------------
+
+### Backend Changes
+
+#### New Features
+
+* [tracegen] Add service name as a command line option ([#2080](https://github.com/jaegertracing/jaeger/pull/2080), [@kevinearls](https://github.com/kevinearls))
+* Allow the Configuration of Additional Headers on the Jaeger Query HTTP API ([#2056](https://github.com/jaegertracing/jaeger/pull/2056), [@joe-elliott](https://github.com/joe-elliott))
+* Warn about time adjustment in tags ([#2052](https://github.com/jaegertracing/jaeger/pull/2052), [@bobrik](https://github.com/bobrik))
+* Add CLI flags for Kafka batching params ([#2047](https://github.com/jaegertracing/jaeger/pull/2047), [@apm-opentt](https://github.com/apm-opentt))
+* Added support for dynamic queue sizes ([#1985](https://github.com/jaegertracing/jaeger/pull/1985), [@jpkrohling](https://github.com/jpkrohling))
+* [agent] Process data loss stats from clients ([#2010](https://github.com/jaegertracing/jaeger/pull/2010), [@yurishkuro](https://github.com/yurishkuro))
+* Add /api/sampling endpoint in collector ([#1990](https://github.com/jaegertracing/jaeger/pull/1990), [@RickyRajinder](https://github.com/RickyRajinder))
+* Add basic authentication to Kafka storage ([#1983](https://github.com/jaegertracing/jaeger/pull/1983), [@chandresh-pancholi](https://github.com/chandresh-pancholi))
+* Make operation_strategies part also be part of default_strategy  ([#1749](https://github.com/jaegertracing/jaeger/pull/1749), [@rutgerbrf](https://github.com/rutgerbrf))
+
+#### Bug fixes, Minor Improvements
+
+* Upgrade gRPC to ^1.26 ([#2077](https://github.com/jaegertracing/jaeger/pull/2077), [@yurishkuro](https://github.com/yurishkuro))
+* Remove pkg/errors from dependencies ([#2073](https://github.com/jaegertracing/jaeger/pull/2073), [@yurishkuro](https://github.com/yurishkuro))
+* Update dependencies, pin grpc<1.27 ([#2072](https://github.com/jaegertracing/jaeger/pull/2072), [@yurishkuro](https://github.com/yurishkuro))
+* Refactor collector mains ([#2060](https://github.com/jaegertracing/jaeger/pull/2060), [@jpkrohling](https://github.com/jpkrohling))
+* Clarify that "kafka" is not a real storage backend ([#2066](https://github.com/jaegertracing/jaeger/pull/2066), [@yurishkuro](https://github.com/yurishkuro))
+* Added -trimpath option to go build ([#2064](https://github.com/jaegertracing/jaeger/pull/2064), [@kadern0](https://github.com/kadern0))
+* Use memory size flag to activate dyn queue size feature ([#2059](https://github.com/jaegertracing/jaeger/pull/2059), [@jpkrohling](https://github.com/jpkrohling))
+* Add before you push to the queue to prevent race condition on size ([#2044](https://github.com/jaegertracing/jaeger/pull/2044), [@joe-elliott](https://github.com/joe-elliott))
+* Count received batches from conforming clients ([#2030](https://github.com/jaegertracing/jaeger/pull/2030), [@yurishkuro](https://github.com/yurishkuro))
+* [agent] Do not increment data loss counters on the first client batch ([#2028](https://github.com/jaegertracing/jaeger/pull/2028), [@yurishkuro](https://github.com/yurishkuro))
+* Allow raw port numbers for UDP servers ([#2025](https://github.com/jaegertracing/jaeger/pull/2025), [@yurishkuro](https://github.com/yurishkuro))
+* Publish tracegen ([#2022](https://github.com/jaegertracing/jaeger/pull/2022), [@jpkrohling](https://github.com/jpkrohling))
+* Build binaries for Linux on IBM Z / s390x architecture ([#1982](https://github.com/jaegertracing/jaeger/pull/1982), [@prankkelkar](https://github.com/prankkelkar))
+* Admin/Query: Log the real port instead of the provided one to enable the use of port 0 ([#2002](https://github.com/jaegertracing/jaeger/pull/2002), [@ChadiEM](https://github.com/ChadiEM))
+* Split agent's HTTP server and handler ([#1996](https://github.com/jaegertracing/jaeger/pull/1996), [@yurishkuro](https://github.com/yurishkuro))
+* Clean-up collector handlers builder ([#1991](https://github.com/jaegertracing/jaeger/pull/1991), [@yurishkuro](https://github.com/yurishkuro))
+* Added 'resize' operation to BoundedQueue ([#1948](https://github.com/jaegertracing/jaeger/pull/1949), [@jpkrohling](https://github.com/jpkrohling))
+* Add common TLS configuration ([#1838](https://github.com/jaegertracing/jaeger/pull/1838), [@backjo](https://github.com/backjo))
+
+### UI Changes
+
+* UI pinned to version 1.7.0. The changelog is available here [v1.7.0](https://github.com/jaegertracing/jaeger-ui/blob/master/CHANGELOG.md#v170-february-21-2020)
 
 1.16.0 (2019-12-17)
 ------------------
@@ -1006,26 +1137,4 @@ jaeger_query_responses_bucket{operation="find_traces",le="0.005"} 2
 
 - Add viper/cobra configuration support [#245](https://github.com/uber/jaeger/pull/245) [#307](https://github.com/uber/jaeger/pull/307)
 - Add Zipkin /api/v1/spans endpoint [#282](https://github.com/uber/jaeger/pull/282)
-- Add basic authenticator to configs for cassandra [#323](https://github.com/uber/jaeger/pull/323)
-- Add Elasticsearch storage support
-
-
-0.5.2 (2017-07-20)
-------------------
-
-- Use official Cassandra 3.11 base image [#278](https://github.com/uber/jaeger/pull/278)
-- Support configurable metrics backend in the agent [#275](https://github.com/uber/jaeger/pull/275)
-
-
-0.5.1 (2017-07-03)
-------------------
-
-- Bug fix: Query startup should fail when -query.static-files has no trailing slash [#144](https://github.com/uber/jaeger/issues/144)
-- Push to Docker Hub on release tags [#246](https://github.com/uber/jaeger/pull/246)
-
-
-0.5.0 (2017-07-01)
-------------------
-
-First numbered release.
-
+- Add basic authenticator to configs for cass

@@ -17,11 +17,11 @@ package spanstore
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	"github.com/pkg/errors"
 	"github.com/uber/jaeger-lib/metrics"
 	"go.uber.org/zap"
 
@@ -37,10 +37,6 @@ const (
 		INTO traces(trace_id, span_id, span_hash, parent_id, operation_name, flags,
 				    start_time, duration, tags, logs, refs, process)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	insertTag = `
-		INSERT
-		INTO tag_index(trace_id, span_id, service_name, start_time, tag_key, tag_value)
-		VALUES (?, ?, ?, ?, ?, ?)`
 
 	serviceNameIndex = `
 		INSERT
@@ -52,6 +48,11 @@ const (
 		INTO
 		service_operation_index(service_name, operation_name, start_time, trace_id)
 		VALUES (?, ?, ?, ?)`
+
+	tagIndex = `
+		INSERT
+		INTO tag_index(trace_id, span_id, service_name, start_time, tag_key, tag_value)
+		VALUES (?, ?, ?, ?, ?, ?)`
 
 	durationIndex = `
 		INSERT
@@ -141,7 +142,7 @@ func (s *SpanWriter) WriteSpan(span *model.Span) error {
 			return err
 		}
 	}
-	if s.storageMode&indexFlag == indexFlag && !span.Flags.IsFirehoseEnabled() {
+	if s.storageMode&indexFlag == indexFlag {
 		if err := s.writeIndexes(span, ds); err != nil {
 			return err
 		}
@@ -182,10 +183,6 @@ func (s *SpanWriter) writeIndexes(span *model.Span, ds *dbmodel.Span) error {
 		return s.logError(ds, err, "Failed to insert service name and operation name", s.logger)
 	}
 
-	if err := s.indexByTags(span, ds); err != nil {
-		return s.logError(ds, err, "Failed to index tags", s.logger)
-	}
-
 	if s.indexFilter(ds, dbmodel.ServiceIndex) {
 		if err := s.indexByService(ds); err != nil {
 			return s.logError(ds, err, "Failed to index service name", s.logger)
@@ -196,6 +193,14 @@ func (s *SpanWriter) writeIndexes(span *model.Span, ds *dbmodel.Span) error {
 		if err := s.indexByOperation(ds); err != nil {
 			return s.logError(ds, err, "Failed to index operation name", s.logger)
 		}
+	}
+
+	if span.Flags.IsFirehoseEnabled() {
+		return nil // skipping expensive indexing
+	}
+
+	if err := s.indexByTags(span, ds); err != nil {
+		return s.logError(ds, err, "Failed to index tags", s.logger)
 	}
 
 	if s.indexFilter(ds, dbmodel.DurationIndex) {
@@ -211,7 +216,7 @@ func (s *SpanWriter) indexByTags(span *model.Span, ds *dbmodel.Span) error {
 		// we should introduce retries or just ignore failures imo, retrying each individual tag insertion might be better
 		// we should consider bucketing.
 		if s.shouldIndexTag(v) {
-			insertTagQuery := s.session.Query(insertTag, ds.TraceID, ds.SpanID, v.ServiceName, ds.StartTime, v.TagKey, v.TagValue)
+			insertTagQuery := s.session.Query(tagIndex, ds.TraceID, ds.SpanID, v.ServiceName, ds.StartTime, v.TagKey, v.TagValue)
 			if err := s.writerMetrics.tagIndex.Exec(insertTagQuery, s.logger); err != nil {
 				withTagInfo := s.logger.
 					With(zap.String("tag_key", v.TagKey)).
@@ -276,7 +281,7 @@ func (s *SpanWriter) logError(span *dbmodel.Span, err error, msg string, logger 
 		With(zap.Int64("span_id", span.SpanID)).
 		With(zap.Error(err)).
 		Error(msg)
-	return errors.Wrap(err, msg)
+	return fmt.Errorf("%s: %w", msg, err)
 }
 
 func (s *SpanWriter) saveServiceNameAndOperationName(operation dbmodel.Operation) error {

@@ -23,6 +23,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/jaegertracing/jaeger/pkg/cassandra/config"
+	"github.com/jaegertracing/jaeger/pkg/config/tlscfg"
 )
 
 const (
@@ -43,13 +44,9 @@ const (
 	suffixSocketKeepAlive      = ".socket-keep-alive"
 	suffixUsername             = ".username"
 	suffixPassword             = ".password"
-	suffixTLS                  = ".tls"
-	suffixCert                 = ".tls.cert"
-	suffixKey                  = ".tls.key"
-	suffixCA                   = ".tls.ca"
-	suffixServerName           = ".tls.server-name"
-	suffixVerifyHost           = ".tls.verify-host"
 	suffixEnableDependenciesV2 = ".enable-dependencies-v2"
+
+	suffixVerifyHost = ".tls.verify-host"
 
 	// common storage settings
 	suffixSpanStoreWriteCacheTTL = ".span-store-write-cache-ttl"
@@ -64,37 +61,38 @@ const (
 // to bind them to command line flag and apply overlays, so that some configurations
 // (e.g. archive) may be underspecified and infer the rest of its parameters from primary.
 type Options struct {
-	primary                 *namespaceConfig
-	others                  map[string]*namespaceConfig
-	SpanStoreWriteCacheTTL  time.Duration
-	tagIndexBlacklist       string
-	tagIndexWhitelist       string
-	DisableLogsIndex        bool
-	DisableTagsIndex        bool
-	DisableProcessTagsIndex bool
+	Primary                namespaceConfig `mapstructure:",squash"`
+	others                 map[string]*namespaceConfig
+	SpanStoreWriteCacheTTL time.Duration `mapstructure:"span_store_write_cache_ttl"`
+	Index                  IndexConfig   `mapstructure:"index"`
+}
+
+// IndexConfig configures indexing.
+// By default all indexing is enabled.
+type IndexConfig struct {
+	Logs         bool   `mapstructure:"logs"`
+	Tags         bool   `mapstructure:"tags"`
+	ProcessTags  bool   `mapstructure:"process_tags"`
+	TagBlackList string `mapstructure:"tag_blacklist"`
+	TagWhiteList string `mapstructure:"tag_whitelist"`
 }
 
 // the Servers field in config.Configuration is a list, which we cannot represent with flags.
 // This struct adds a plain string field that can be bound to flags and is then parsed when
 // preparing the actual config.Configuration.
 type namespaceConfig struct {
-	config.Configuration
-	servers   string
-	namespace string
-	primary   bool
-	Enabled   bool
+	config.Configuration `mapstructure:",squash"`
+	servers              string
+	namespace            string
+	Enabled              bool `mapstructure:"-"`
 }
 
 // NewOptions creates a new Options struct.
 func NewOptions(primaryNamespace string, otherNamespaces ...string) *Options {
 	// TODO all default values should be defined via cobra flags
 	options := &Options{
-		primary: &namespaceConfig{
+		Primary: namespaceConfig{
 			Configuration: config.Configuration{
-				TLS: config.TLS{
-					Enabled:                false,
-					EnableHostVerification: true,
-				},
 				MaxRetryAttempts:   3,
 				Keyspace:           "jaeger_v1_test",
 				ProtoVersion:       4,
@@ -103,7 +101,6 @@ func NewOptions(primaryNamespace string, otherNamespaces ...string) *Options {
 			},
 			servers:   "127.0.0.1",
 			namespace: primaryNamespace,
-			primary:   true,
 			Enabled:   true,
 		},
 		others:                 make(map[string]*namespaceConfig, len(otherNamespaces)),
@@ -117,39 +114,58 @@ func NewOptions(primaryNamespace string, otherNamespaces ...string) *Options {
 	return options
 }
 
+// NewOptionsFromConfig creates Options from primary and archive config
+func NewOptionsFromConfig(primary config.Configuration, archive config.Configuration) *Options {
+	return &Options{
+		Primary: namespaceConfig{
+			namespace:     primaryStorageConfig,
+			Configuration: primary,
+		},
+		others: map[string]*namespaceConfig{
+			archiveStorageConfig: {
+				namespace:     archiveStorageConfig,
+				Configuration: archive,
+			},
+		},
+	}
+}
+
 // AddFlags adds flags for Options
 func (opt *Options) AddFlags(flagSet *flag.FlagSet) {
-	addFlags(flagSet, opt.primary)
+	addFlags(flagSet, opt.Primary)
 	for _, cfg := range opt.others {
-		addFlags(flagSet, cfg)
+		addFlags(flagSet, *cfg)
 	}
-	flagSet.Duration(opt.primary.namespace+suffixSpanStoreWriteCacheTTL,
+	flagSet.Duration(opt.Primary.namespace+suffixSpanStoreWriteCacheTTL,
 		opt.SpanStoreWriteCacheTTL,
 		"The duration to wait before rewriting an existing service or operation name")
 	flagSet.String(
-		opt.primary.namespace+suffixIndexTagsBlacklist,
-		opt.tagIndexBlacklist,
+		opt.Primary.namespace+suffixIndexTagsBlacklist,
+		opt.Index.TagBlackList,
 		"The comma-separated list of span tags to blacklist from being indexed. All other tags will be indexed. Mutually exclusive with the whitelist option.")
 	flagSet.String(
-		opt.primary.namespace+suffixIndexTagsWhitelist,
-		opt.tagIndexWhitelist,
+		opt.Primary.namespace+suffixIndexTagsWhitelist,
+		opt.Index.TagWhiteList,
 		"The comma-separated list of span tags to whitelist for being indexed. All other tags will not be indexed. Mutually exclusive with the blacklist option.")
 	flagSet.Bool(
-		opt.primary.namespace+suffixIndexLogs,
-		!opt.DisableLogsIndex,
+		opt.Primary.namespace+suffixIndexLogs,
+		!opt.Index.Logs,
 		"Controls log field indexing. Set to false to disable.")
 	flagSet.Bool(
-		opt.primary.namespace+suffixIndexTags,
-		!opt.DisableTagsIndex,
+		opt.Primary.namespace+suffixIndexTags,
+		!opt.Index.Tags,
 		"Controls tag indexing. Set to false to disable.")
 	flagSet.Bool(
-		opt.primary.namespace+suffixIndexProcessTags,
-		!opt.DisableProcessTagsIndex,
+		opt.Primary.namespace+suffixIndexProcessTags,
+		!opt.Index.ProcessTags,
 		"Controls process tag indexing. Set to false to disable.")
 }
 
-func addFlags(flagSet *flag.FlagSet, nsConfig *namespaceConfig) {
-	if !nsConfig.primary {
+func addFlags(flagSet *flag.FlagSet, nsConfig namespaceConfig) {
+	var tlsFlagsConfig = tlsFlagsConfig(nsConfig.namespace)
+	tlsFlagsConfig.AddFlags(flagSet)
+
+	if nsConfig.namespace != primaryStorageConfig {
 		flagSet.Bool(
 			nsConfig.namespace+suffixEnabled,
 			false,
@@ -216,51 +232,40 @@ func addFlags(flagSet *flag.FlagSet, nsConfig *namespaceConfig) {
 		nsConfig.Authenticator.Basic.Password,
 		"Password for password authentication for Cassandra")
 	flagSet.Bool(
-		nsConfig.namespace+suffixTLS,
-		nsConfig.TLS.Enabled,
-		"Enable TLS")
-	flagSet.String(
-		nsConfig.namespace+suffixCert,
-		nsConfig.TLS.CertPath,
-		"Path to TLS certificate file")
-	flagSet.String(
-		nsConfig.namespace+suffixKey,
-		nsConfig.TLS.KeyPath,
-		"Path to TLS key file")
-	flagSet.String(
-		nsConfig.namespace+suffixCA,
-		nsConfig.TLS.CaPath,
-		"Path to TLS CA file")
-	flagSet.String(
-		nsConfig.namespace+suffixServerName,
-		nsConfig.TLS.ServerName,
-		"Override the TLS server name")
-	flagSet.Bool(
-		nsConfig.namespace+suffixVerifyHost,
-		nsConfig.TLS.EnableHostVerification,
-		"Enable (or disable) host key verification")
-	flagSet.Bool(
 		nsConfig.namespace+suffixEnableDependenciesV2,
 		nsConfig.EnableDependenciesV2,
 		"(deprecated) Jaeger will automatically detect the version of the dependencies table")
+	flagSet.Bool(
+		nsConfig.namespace+suffixVerifyHost,
+		false,
+		"(deprecated) Enable (or disable) host key verification. Use "+nsConfig.namespace+".tls.skip-host-verify instead")
 }
 
 // InitFromViper initializes Options with properties from viper
 func (opt *Options) InitFromViper(v *viper.Viper) {
-	opt.primary.initFromViper(v)
+	opt.Primary.initFromViper(v)
 	for _, cfg := range opt.others {
 		cfg.initFromViper(v)
 	}
-	opt.SpanStoreWriteCacheTTL = v.GetDuration(opt.primary.namespace + suffixSpanStoreWriteCacheTTL)
-	opt.tagIndexBlacklist = stripWhiteSpace(v.GetString(opt.primary.namespace + suffixIndexTagsBlacklist))
-	opt.tagIndexWhitelist = stripWhiteSpace(v.GetString(opt.primary.namespace + suffixIndexTagsWhitelist))
-	opt.DisableTagsIndex = !v.GetBool(opt.primary.namespace + suffixIndexTags)
-	opt.DisableLogsIndex = !v.GetBool(opt.primary.namespace + suffixIndexLogs)
-	opt.DisableProcessTagsIndex = !v.GetBool(opt.primary.namespace + suffixIndexProcessTags)
+	opt.SpanStoreWriteCacheTTL = v.GetDuration(opt.Primary.namespace + suffixSpanStoreWriteCacheTTL)
+	opt.Index.TagBlackList = stripWhiteSpace(v.GetString(opt.Primary.namespace + suffixIndexTagsBlacklist))
+	opt.Index.TagWhiteList = stripWhiteSpace(v.GetString(opt.Primary.namespace + suffixIndexTagsWhitelist))
+	opt.Index.Tags = v.GetBool(opt.Primary.namespace + suffixIndexTags)
+	opt.Index.Logs = v.GetBool(opt.Primary.namespace + suffixIndexLogs)
+	opt.Index.ProcessTags = v.GetBool(opt.Primary.namespace + suffixIndexProcessTags)
+}
+
+func tlsFlagsConfig(namespace string) tlscfg.ClientFlagsConfig {
+	return tlscfg.ClientFlagsConfig{
+		Prefix:         namespace,
+		ShowEnabled:    true,
+		ShowServerName: true,
+	}
 }
 
 func (cfg *namespaceConfig) initFromViper(v *viper.Viper) {
-	if !cfg.primary {
+	var tlsFlagsConfig = tlsFlagsConfig(cfg.namespace)
+	if cfg.namespace != primaryStorageConfig {
 		cfg.Enabled = v.GetBool(cfg.namespace + suffixEnabled)
 	}
 	cfg.ConnectionsPerHost = v.GetInt(cfg.namespace + suffixConnPerHost)
@@ -277,20 +282,19 @@ func (cfg *namespaceConfig) initFromViper(v *viper.Viper) {
 	cfg.SocketKeepAlive = v.GetDuration(cfg.namespace + suffixSocketKeepAlive)
 	cfg.Authenticator.Basic.Username = v.GetString(cfg.namespace + suffixUsername)
 	cfg.Authenticator.Basic.Password = v.GetString(cfg.namespace + suffixPassword)
-	cfg.TLS.Enabled = v.GetBool(cfg.namespace + suffixTLS)
-	cfg.TLS.CertPath = v.GetString(cfg.namespace + suffixCert)
-	cfg.TLS.KeyPath = v.GetString(cfg.namespace + suffixKey)
-	cfg.TLS.CaPath = v.GetString(cfg.namespace + suffixCA)
-	cfg.TLS.ServerName = v.GetString(cfg.namespace + suffixServerName)
-	cfg.TLS.EnableHostVerification = v.GetBool(cfg.namespace + suffixVerifyHost)
 	cfg.EnableDependenciesV2 = v.GetBool(cfg.namespace + suffixEnableDependenciesV2)
 	cfg.DisableCompression = v.GetBool(cfg.namespace + suffixDisableCompression)
+	cfg.TLS = tlsFlagsConfig.InitFromViper(v)
+
+	if v.IsSet(cfg.namespace + suffixVerifyHost) {
+		cfg.TLS.SkipHostVerify = !v.GetBool(cfg.namespace + suffixVerifyHost)
+	}
 }
 
 // GetPrimary returns primary configuration.
 func (opt *Options) GetPrimary() *config.Configuration {
-	opt.primary.Servers = strings.Split(opt.primary.servers, ",")
-	return &opt.primary.Configuration
+	opt.Primary.Servers = strings.Split(opt.Primary.servers, ",")
+	return &opt.Primary.Configuration
 }
 
 // Get returns auxiliary named configuration.
@@ -303,9 +307,9 @@ func (opt *Options) Get(namespace string) *config.Configuration {
 	if !nsCfg.Enabled {
 		return nil
 	}
-	nsCfg.Configuration.ApplyDefaults(&opt.primary.Configuration)
+	nsCfg.Configuration.ApplyDefaults(&opt.Primary.Configuration)
 	if nsCfg.servers == "" {
-		nsCfg.servers = opt.primary.servers
+		nsCfg.servers = opt.Primary.servers
 	}
 	nsCfg.Servers = strings.Split(nsCfg.servers, ",")
 	return &nsCfg.Configuration
@@ -313,8 +317,8 @@ func (opt *Options) Get(namespace string) *config.Configuration {
 
 // TagIndexBlacklist returns the list of blacklisted tags
 func (opt *Options) TagIndexBlacklist() []string {
-	if len(opt.tagIndexBlacklist) > 0 {
-		return strings.Split(opt.tagIndexBlacklist, ",")
+	if len(opt.Index.TagBlackList) > 0 {
+		return strings.Split(opt.Index.TagBlackList, ",")
 	}
 
 	return nil
@@ -322,8 +326,8 @@ func (opt *Options) TagIndexBlacklist() []string {
 
 // TagIndexWhitelist returns the list of whitelisted tags
 func (opt *Options) TagIndexWhitelist() []string {
-	if len(opt.tagIndexWhitelist) > 0 {
-		return strings.Split(opt.tagIndexWhitelist, ",")
+	if len(opt.Index.TagWhiteList) > 0 {
+		return strings.Split(opt.Index.TagWhiteList, ",")
 	}
 
 	return nil

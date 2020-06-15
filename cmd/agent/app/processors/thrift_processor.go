@@ -23,7 +23,7 @@ import (
 	"github.com/uber/jaeger-lib/metrics"
 	"go.uber.org/zap"
 
-	"github.com/jaegertracing/jaeger/cmd/agent/app/customtransports"
+	"github.com/jaegertracing/jaeger/cmd/agent/app/customtransport"
 	"github.com/jaegertracing/jaeger/cmd/agent/app/servers"
 )
 
@@ -44,7 +44,10 @@ type ThriftProcessor struct {
 	}
 }
 
-// AgentProcessor handler used by the processor to process thrift and call the reporter with the deserialized struct
+// AgentProcessor handler used by the processor to process thrift and call the reporter
+// with the deserialized struct. This interface is implemented directly by Thrift generated
+// code, e.g. jaegerThrift.NewAgentProcessor(handler), where handler implements the Agent
+// Thrift service interface, which is invoked with the deserialized struct.
 type AgentProcessor interface {
 	Process(iprot, oprot thrift.TProtocol) (success bool, err thrift.TException)
 }

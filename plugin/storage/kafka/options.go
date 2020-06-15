@@ -43,6 +43,9 @@ const (
 	suffixCompression      = ".compression"
 	suffixCompressionLevel = ".compression-level"
 	suffixProtocolVersion  = ".protocol-version"
+	suffixBatchLinger      = ".batch-linger"
+	suffixBatchSize        = ".batch-size"
+	suffixBatchMaxMessages = ".batch-max-messages"
 
 	defaultBroker           = "127.0.0.1:9092"
 	defaultTopic            = "jaeger-spans"
@@ -50,6 +53,9 @@ const (
 	defaultRequiredAcks     = "local"
 	defaultCompression      = "none"
 	defaultCompressionLevel = 0
+	defaultBatchLinger      = 0
+	defaultBatchSize        = 0
+	defaultBatchMaxMessages = 0
 )
 
 var (
@@ -102,9 +108,9 @@ var (
 
 // Options stores the configuration options for Kafka
 type Options struct {
-	config   producer.Configuration
-	topic    string
-	encoding string
+	Config   producer.Configuration `mapstructure:",squash"`
+	Topic    string                 `mapstructure:"topic"`
+	Encoding string                 `mapstructure:"encoding"`
 }
 
 // AddFlags adds flags for Options
@@ -141,6 +147,21 @@ func (opt *Options) AddFlags(flagSet *flag.FlagSet) {
 		defaultCompressionLevel,
 		"(experimental) compression level to use on messages. gzip = 1-9 (default = 6), snappy = none, lz4 = 1-17 (default = 9), zstd = -131072 - 22 (default = 3)",
 	)
+	flagSet.Duration(
+		configPrefix+suffixBatchLinger,
+		defaultBatchLinger,
+		"(experimental) Time interval to wait before sending records to Kafka. Higher value reduce request to Kafka but increase latency and the possibility of data loss in case of process restart. See https://kafka.apache.org/documentation/",
+	)
+	flagSet.Int(
+		configPrefix+suffixBatchSize,
+		defaultBatchSize,
+		"(experimental) Number of bytes to batch before sending records to Kafka. Higher value reduce request to Kafka but increase latency and the possibility of data loss in case of process restart. See https://kafka.apache.org/documentation/",
+	)
+	flagSet.Int(
+		configPrefix+suffixBatchMaxMessages,
+		defaultBatchMaxMessages,
+		"(experimental) Number of message to batch before sending records to Kafka. Higher value reduce request to Kafka but increase latency and the possibility of data loss in case of process restart. See https://kafka.apache.org/documentation/",
+	)
 	auth.AddFlags(configPrefix, flagSet)
 }
 
@@ -165,16 +186,19 @@ func (opt *Options) InitFromViper(v *viper.Viper) {
 		log.Fatal(err)
 	}
 
-	opt.config = producer.Configuration{
+	opt.Config = producer.Configuration{
 		Brokers:              strings.Split(stripWhiteSpace(v.GetString(configPrefix+suffixBrokers)), ","),
 		RequiredAcks:         requiredAcks,
 		Compression:          compressionModeCodec,
 		CompressionLevel:     compressionLevel,
 		ProtocolVersion:      v.GetString(configPrefix + suffixProtocolVersion),
 		AuthenticationConfig: authenticationOptions,
+		BatchLinger:          v.GetDuration(configPrefix + suffixBatchLinger),
+		BatchSize:            v.GetInt(configPrefix + suffixBatchSize),
+		BatchMaxMessages:     v.GetInt(configPrefix + suffixBatchMaxMessages),
 	}
-	opt.topic = v.GetString(configPrefix + suffixTopic)
-	opt.encoding = v.GetString(configPrefix + suffixEncoding)
+	opt.Topic = v.GetString(configPrefix + suffixTopic)
+	opt.Encoding = v.GetString(configPrefix + suffixEncoding)
 }
 
 // stripWhiteSpace removes all whitespace characters from a string

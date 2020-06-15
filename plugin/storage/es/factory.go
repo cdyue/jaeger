@@ -18,12 +18,12 @@ package es
 import (
 	"bufio"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
-	"github.com/pkg/errors"
 	"github.com/spf13/viper"
 	"github.com/uber/jaeger-lib/metrics"
 	"go.uber.org/zap"
@@ -74,19 +74,28 @@ func (f *Factory) InitFromViper(v *viper.Viper) {
 	f.archiveConfig = f.Options.Get(archiveNamespace)
 }
 
+// InitFromOptions configures factory from Options struct.
+func (f *Factory) InitFromOptions(o Options) {
+	f.Options = &o
+	f.primaryConfig = f.Options.GetPrimary()
+	if cfg := f.Options.Get(archiveNamespace); cfg != nil {
+		f.archiveConfig = cfg
+	}
+}
+
 // Initialize implements storage.Factory
 func (f *Factory) Initialize(metricsFactory metrics.Factory, logger *zap.Logger) error {
 	f.metricsFactory, f.logger = metricsFactory, logger
 
 	primaryClient, err := f.primaryConfig.NewClient(logger, metricsFactory)
 	if err != nil {
-		return errors.Wrap(err, "failed to create primary Elasticsearch client")
+		return fmt.Errorf("failed to create primary Elasticsearch client: %w", err)
 	}
 	f.primaryClient = primaryClient
-	if f.archiveConfig.IsEnabled() {
+	if f.archiveConfig.IsStorageEnabled() {
 		f.archiveClient, err = f.archiveConfig.NewClient(logger, metricsFactory)
 		if err != nil {
-			return errors.Wrap(err, "failed to create archive Elasticsearch client")
+			return fmt.Errorf("failed to create archive Elasticsearch client: %w", err)
 		}
 	}
 	return nil
@@ -104,7 +113,8 @@ func (f *Factory) CreateSpanWriter() (spanstore.Writer, error) {
 
 // CreateDependencyReader implements storage.Factory
 func (f *Factory) CreateDependencyReader() (dependencystore.Reader, error) {
-	return esDepStore.NewDependencyStore(f.primaryClient, f.logger, f.primaryConfig.GetIndexPrefix()), nil
+	reader := esDepStore.NewDependencyStore(f.primaryClient, f.logger, f.primaryConfig.GetIndexPrefix())
+	return reader, nil
 }
 
 func loadTagsFromFile(filePath string) ([]string, error) {
@@ -112,6 +122,7 @@ func loadTagsFromFile(filePath string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	/* #nosec G307 */
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
@@ -127,7 +138,7 @@ func loadTagsFromFile(filePath string) ([]string, error) {
 
 // CreateArchiveSpanReader implements storage.ArchiveFactory
 func (f *Factory) CreateArchiveSpanReader() (spanstore.Reader, error) {
-	if !f.archiveConfig.IsEnabled() {
+	if !f.archiveConfig.IsStorageEnabled() {
 		return nil, nil
 	}
 	return createSpanReader(f.metricsFactory, f.logger, f.archiveClient, f.archiveConfig, true)
@@ -135,7 +146,7 @@ func (f *Factory) CreateArchiveSpanReader() (spanstore.Reader, error) {
 
 // CreateArchiveSpanWriter implements storage.ArchiveFactory
 func (f *Factory) CreateArchiveSpanWriter() (spanstore.Writer, error) {
-	if !f.archiveConfig.IsEnabled() {
+	if !f.archiveConfig.IsStorageEnabled() {
 		return nil, nil
 	}
 	return createSpanWriter(f.metricsFactory, f.logger, f.archiveClient, f.archiveConfig, true)
@@ -177,7 +188,7 @@ func createSpanWriter(
 		}
 	}
 
-	spanMapping, serviceMapping := GetMappings(cfg.GetNumShards(), cfg.GetNumReplicas(), client.GetVersion())
+	spanMapping, serviceMapping := GetSpanServiceMappings(cfg.GetNumShards(), cfg.GetNumReplicas(), client.GetVersion())
 	writer := esSpanStore.NewSpanWriter(esSpanStore.SpanWriterParams{
 		Client:              client,
 		Logger:              logger,
@@ -198,14 +209,22 @@ func createSpanWriter(
 	return writer, nil
 }
 
-// GetMappings returns span and service mappings
-func GetMappings(shards, replicas int64, esVersion uint) (string, string) {
+// GetSpanServiceMappings returns span and service mappings
+func GetSpanServiceMappings(shards, replicas int64, esVersion uint) (string, string) {
 	if esVersion == 7 {
 		return fixMapping(loadMapping("/jaeger-span-7.json"), shards, replicas),
 			fixMapping(loadMapping("/jaeger-service-7.json"), shards, replicas)
 	}
 	return fixMapping(loadMapping("/jaeger-span.json"), shards, replicas),
 		fixMapping(loadMapping("/jaeger-service.json"), shards, replicas)
+}
+
+// GetDependenciesMappings returns dependencies mappings
+func GetDependenciesMappings(shards, replicas int64, esVersion uint) string {
+	if esVersion == 7 {
+		return fixMapping(loadMapping("/jaeger-dependencies-7.json"), shards, replicas)
+	}
+	return fixMapping(loadMapping("/jaeger-dependencies.json"), shards, replicas)
 }
 
 func loadMapping(name string) string {

@@ -30,7 +30,8 @@ const (
 	suffixServerQueueSize     = "server-queue-size"
 	suffixServerMaxPacketSize = "server-max-packet-size"
 	suffixServerHostPort      = "server-host-port"
-	httpServerHostPort        = "http-server.host-port"
+	// HTTPServerHostPort is the flag for HTTP endpoint
+	HTTPServerHostPort = "http-server.host-port"
 )
 
 var defaultProcessors = []struct {
@@ -52,8 +53,13 @@ func AddFlags(flags *flag.FlagSet) {
 		flags.Int(prefix+suffixServerMaxPacketSize, defaultMaxPacketSize, "max packet size for the UDP server")
 		flags.String(prefix+suffixServerHostPort, ":"+strconv.Itoa(p.port), "host:port for the UDP server")
 	}
+	AddOTELFlags(flags)
+}
+
+// AddOTELFlags adds flags that are exposed by OTEL collector
+func AddOTELFlags(flags *flag.FlagSet) {
 	flags.String(
-		httpServerHostPort,
+		HTTPServerHostPort,
 		defaultHTTPServerHostPort,
 		"host:port of the http server (e.g. for /sampling point and /baggageRestrictions endpoint)")
 }
@@ -66,10 +72,19 @@ func (b *Builder) InitFromViper(v *viper.Viper) *Builder {
 		p.Workers = v.GetInt(prefix + suffixWorkers)
 		p.Server.QueueSize = v.GetInt(prefix + suffixServerQueueSize)
 		p.Server.MaxPacketSize = v.GetInt(prefix + suffixServerMaxPacketSize)
-		p.Server.HostPort = v.GetString(prefix + suffixServerHostPort)
+		p.Server.HostPort = portNumToHostPort(v.GetString(prefix + suffixServerHostPort))
 		b.Processors = append(b.Processors, *p)
 	}
 
-	b.HTTPServer.HostPort = v.GetString(httpServerHostPort)
+	b.HTTPServer.HostPort = portNumToHostPort(v.GetString(HTTPServerHostPort))
 	return b
+}
+
+// portNumToHostPort checks if the value is a raw integer port number,
+// and converts it to ":{port}" host-port string, otherwise leaves it as is.
+func portNumToHostPort(v string) string {
+	if _, err := strconv.Atoi(v); err == nil {
+		return ":" + v
+	}
+	return v
 }

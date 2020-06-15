@@ -15,6 +15,8 @@
 package producer
 
 import (
+	"time"
+
 	"github.com/Shopify/sarama"
 
 	"github.com/jaegertracing/jaeger/pkg/kafka/auth"
@@ -27,12 +29,15 @@ type Builder interface {
 
 // Configuration describes the configuration properties needed to create a Kafka producer
 type Configuration struct {
-	Brokers          []string
-	RequiredAcks     sarama.RequiredAcks
-	Compression      sarama.CompressionCodec
-	CompressionLevel int
-	ProtocolVersion  string
-	auth.AuthenticationConfig
+	Brokers                   []string                `mapstructure:"brokers"`
+	RequiredAcks              sarama.RequiredAcks     `mapstructure:"required_acks"`
+	Compression               sarama.CompressionCodec `mapstructure:"compression"`
+	CompressionLevel          int                     `mapstructure:"compression_level"`
+	ProtocolVersion           string                  `mapstructure:"protocol_version"`
+	BatchLinger               time.Duration           `mapstructure:"batch_linger"`
+	BatchSize                 int                     `mapstructure:"batch_size"`
+	BatchMaxMessages          int                     `mapstructure:"batch_max_messages"`
+	auth.AuthenticationConfig `mapstructure:"authentication"`
 }
 
 // NewProducer creates a new asynchronous kafka producer
@@ -42,6 +47,9 @@ func (c *Configuration) NewProducer() (sarama.AsyncProducer, error) {
 	saramaConfig.Producer.Compression = c.Compression
 	saramaConfig.Producer.CompressionLevel = c.CompressionLevel
 	saramaConfig.Producer.Return.Successes = true
+	saramaConfig.Producer.Flush.Bytes = c.BatchSize
+	saramaConfig.Producer.Flush.Frequency = c.BatchLinger
+	saramaConfig.Producer.Flush.MaxMessages = c.BatchMaxMessages
 	if len(c.ProtocolVersion) > 0 {
 		ver, err := sarama.ParseKafkaVersion(c.ProtocolVersion)
 		if err != nil {

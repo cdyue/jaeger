@@ -27,7 +27,6 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/gorilla/mux"
-	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
 	"github.com/jaegertracing/jaeger/cmd/query/app/ui"
@@ -101,7 +100,7 @@ func NewStaticAssetsHandler(staticAssetsRoot string, options StaticAssetsHandler
 func loadIndexBytes(open func(string) (http.File, error), options StaticAssetsHandlerOptions) ([]byte, error) {
 	indexBytes, err := loadIndexHTML(open)
 	if err != nil {
-		return nil, errors.Wrap(err, "cannot load index.html")
+		return nil, fmt.Errorf("cannot load index.html: %w", err)
 	}
 	configString := "JAEGER_CONFIG = DEFAULT_CONFIG"
 	if config, err := loadUIConfig(options.UIConfigPath); err != nil {
@@ -127,6 +126,38 @@ func loadIndexBytes(open func(string) (http.File, error), options StaticAssetsHa
 	return indexBytes, nil
 }
 
+func (sH *StaticAssetsHandler) configListener(watcher *fsnotify.Watcher) {
+	for {
+		select {
+		case event := <-watcher.Events:
+			// ignore if the event filename is not the UI configuration
+			if filepath.Base(event.Name) != filepath.Base(sH.options.UIConfigPath) {
+				continue
+			}
+			// ignore if the event is a chmod event (permission or owner changes)
+			if event.Op&fsnotify.Chmod == fsnotify.Chmod {
+				continue
+			}
+			if event.Op&fsnotify.Remove == fsnotify.Remove {
+				sH.options.Logger.Warn("the UI config file has been removed, using the last known version")
+				continue
+			}
+			// this will catch events for all files inside the same directory, which is OK if we don't have many changes
+			sH.options.Logger.Info("reloading UI config", zap.String("filename", sH.options.UIConfigPath))
+			content, err := loadIndexBytes(sH.assetsFS.Open, sH.options)
+			if err != nil {
+				sH.options.Logger.Error("error while reloading the UI config", zap.Error(err))
+			}
+			sH.indexHTML.Store(content)
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			sH.options.Logger.Error("event", zap.Error(err))
+		}
+	}
+}
+
 func (sH *StaticAssetsHandler) watch() {
 	if sH.options.UIConfigPath == "" {
 		return
@@ -139,34 +170,7 @@ func (sH *StaticAssetsHandler) watch() {
 	}
 
 	go func() {
-		for {
-			select {
-			case event := <-watcher.Events:
-				if event.Op&fsnotify.Remove == fsnotify.Remove {
-					// this might be related to a file inside the dir, so, just log a warn if this is about the file we care about
-					// otherwise, just ignore the event
-					if event.Name == sH.options.UIConfigPath {
-						sH.options.Logger.Warn("the UI config file has been removed, using the last known version")
-					}
-					continue
-				}
-
-				// this will catch events for all files inside the same directory, which is OK if we don't have many changes
-				sH.options.Logger.Info("reloading UI config", zap.String("filename", sH.options.UIConfigPath))
-
-				content, err := loadIndexBytes(sH.assetsFS.Open, sH.options)
-				if err != nil {
-					sH.options.Logger.Error("error while reloading the UI config", zap.Error(err))
-				}
-
-				sH.indexHTML.Store(content)
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
-				sH.options.Logger.Error("event", zap.Error(err))
-			}
-		}
+		sH.configListener(watcher)
 	}()
 
 	err = watcher.Add(sH.options.UIConfigPath)
@@ -188,12 +192,12 @@ func (sH *StaticAssetsHandler) watch() {
 func loadIndexHTML(open func(string) (http.File, error)) ([]byte, error) {
 	indexFile, err := open("/index.html")
 	if err != nil {
-		return nil, errors.Wrap(err, "cannot open index.html")
+		return nil, fmt.Errorf("cannot open index.html: %w", err)
 	}
 	defer indexFile.Close()
 	indexBytes, err := ioutil.ReadAll(indexFile)
 	if err != nil {
-		return nil, errors.Wrap(err, "cannot read from index.html")
+		return nil, fmt.Errorf("cannot read from index.html: %w", err)
 	}
 	return indexBytes, nil
 }
@@ -205,7 +209,7 @@ func loadUIConfig(uiConfig string) (map[string]interface{}, error) {
 	ext := filepath.Ext(uiConfig)
 	bytes, err := ioutil.ReadFile(uiConfig) /* nolint #nosec , this comes from an admin, not user */
 	if err != nil {
-		return nil, errors.Wrapf(err, "cannot read UI config file %v", uiConfig)
+		return nil, fmt.Errorf("cannot read UI config file %v: %w", uiConfig, err)
 	}
 
 	var c map[string]interface{}
@@ -219,7 +223,7 @@ func loadUIConfig(uiConfig string) (map[string]interface{}, error) {
 	}
 
 	if err := unmarshal(bytes, &c); err != nil {
-		return nil, errors.Wrapf(err, "cannot parse UI config file %v", uiConfig)
+		return nil, fmt.Errorf("cannot parse UI config file %v: %w", uiConfig, err)
 	}
 	return c, nil
 }

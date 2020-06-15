@@ -25,6 +25,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/jaegertracing/jaeger/pkg/cassandra"
+	cassCfg "github.com/jaegertracing/jaeger/pkg/cassandra/config"
 	"github.com/jaegertracing/jaeger/pkg/cassandra/mocks"
 	"github.com/jaegertracing/jaeger/pkg/config"
 	"github.com/jaegertracing/jaeger/pkg/testutils"
@@ -180,4 +181,25 @@ func TestWriterOptions(t *testing.T) {
 
 	options, _ = writerOptions(opts)
 	assert.Len(t, options, 0)
+}
+
+func TestInitFromOptions(t *testing.T) {
+	f := NewFactory()
+	o := NewOptions("foo", archiveStorageConfig)
+	o.others[archiveStorageConfig].Enabled = true
+	f.InitFromOptions(o)
+	assert.Equal(t, o, f.Options)
+	assert.Equal(t, o.GetPrimary(), f.primaryConfig)
+	assert.Equal(t, o.Get(archiveStorageConfig), f.archiveConfig)
+}
+
+func TestNewOptions(t *testing.T) {
+	primaryCfg := cassCfg.Configuration{Keyspace: "primary"}
+	archiveCfg := cassCfg.Configuration{Keyspace: "archive"}
+	o := NewOptionsFromConfig(primaryCfg, archiveCfg)
+	assert.Equal(t, primaryCfg, o.Primary.Configuration)
+	assert.Equal(t, primaryStorageConfig, o.Primary.namespace)
+	assert.Equal(t, 1, len(o.others))
+	assert.Equal(t, archiveCfg, o.others[archiveStorageConfig].Configuration)
+	assert.Equal(t, archiveStorageConfig, o.others[archiveStorageConfig].namespace)
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2019 The Jaeger Authors.
+// Copyright (c) 2019,2020 The Jaeger Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -38,7 +37,7 @@ import (
 func TestServerError(t *testing.T) {
 	srv := &Server{
 		queryOptions: &QueryOptions{
-			Port: -1,
+			HostPort: ":-1",
 		},
 	}
 	assert.Error(t, srv.Start())
@@ -47,6 +46,7 @@ func TestServerError(t *testing.T) {
 func TestServer(t *testing.T) {
 	flagsSvc := flags.NewService(ports.QueryAdminHTTP)
 	flagsSvc.Logger = zap.NewNop()
+	hostPort := ports.GetAddressFromCLIOptions(ports.QueryHTTP, "")
 
 	spanReader := &spanstoremocks.Reader{}
 	dependencyReader := &depsmocks.Reader{}
@@ -55,12 +55,17 @@ func TestServer(t *testing.T) {
 
 	querySvc := querysvc.NewQueryService(spanReader, dependencyReader, querysvc.QueryServiceOptions{})
 
-	server := NewServer(flagsSvc, querySvc,
-		&QueryOptions{Port: ports.QueryHTTP, BearerTokenPropagation: true},
+	server := NewServer(flagsSvc.Logger, querySvc,
+		&QueryOptions{HostPort: hostPort, BearerTokenPropagation: true},
 		opentracing.NoopTracer{})
 	assert.NoError(t, server.Start())
+	go func() {
+		for s := range server.HealthCheckStatus() {
+			flagsSvc.SetHealthCheckStatus(s)
+		}
+	}()
 
-	client := newGRPCClient(t, fmt.Sprintf(":%d", ports.QueryHTTP))
+	client := newGRPCClient(t, hostPort)
 	defer client.conn.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -72,12 +77,12 @@ func TestServer(t *testing.T) {
 
 	server.Close()
 	for i := 0; i < 10; i++ {
-		if server.svc.HC().Get() == healthcheck.Unavailable {
+		if flagsSvc.HC().Get() == healthcheck.Unavailable {
 			break
 		}
 		time.Sleep(1 * time.Millisecond)
 	}
-	assert.Equal(t, healthcheck.Unavailable, server.svc.HC().Get())
+	assert.Equal(t, healthcheck.Unavailable, flagsSvc.HC().Get())
 }
 
 func TestServerGracefulExit(t *testing.T) {
@@ -90,8 +95,13 @@ func TestServerGracefulExit(t *testing.T) {
 
 	querySvc := &querysvc.QueryService{}
 	tracer := opentracing.NoopTracer{}
-	server := NewServer(flagsSvc, querySvc, &QueryOptions{Port: ports.QueryAdminHTTP}, tracer)
+	server := NewServer(flagsSvc.Logger, querySvc, &QueryOptions{HostPort: ports.PortToHostPort(ports.QueryAdminHTTP)}, tracer)
 	assert.NoError(t, server.Start())
+	go func() {
+		for s := range server.HealthCheckStatus() {
+			flagsSvc.SetHealthCheckStatus(s)
+		}
+	}()
 
 	// Wait for servers to come up before we can call .Close()
 	// TODO Find a way to wait only as long as necessary. Unconditional sleep slows down the tests.
@@ -102,4 +112,23 @@ func TestServerGracefulExit(t *testing.T) {
 		assert.True(t, logEntry.Level != zap.ErrorLevel,
 			"Error log found on server exit: %v", logEntry)
 	}
+}
+
+func TestServerHandlesPortZero(t *testing.T) {
+	flagsSvc := flags.NewService(ports.QueryAdminHTTP)
+	zapCore, logs := observer.New(zap.InfoLevel)
+	flagsSvc.Logger = zap.New(zapCore)
+
+	querySvc := &querysvc.QueryService{}
+	tracer := opentracing.NoopTracer{}
+	server := NewServer(flagsSvc.Logger, querySvc, &QueryOptions{HostPort: ":0"}, tracer)
+	assert.NoError(t, server.Start())
+	server.Close()
+
+	message := logs.FilterMessage("Query server started")
+	assert.Equal(t, 1, message.Len(), "Expected query started log message.")
+
+	onlyEntry := message.All()[0]
+	port := onlyEntry.ContextMap()["port"]
+	assert.Greater(t, port, int64(0))
 }

@@ -33,8 +33,9 @@ function stage-platform-files {
 function package {
     local PLATFORM=$1
     local FILE_EXTENSION=$2
-
-    local PACKAGE_STAGING_DIR=jaeger-$VERSION-$PLATFORM-amd64
+    # script start
+    local PACKAGE_STAGING_DIR=jaeger-$VERSION-$PLATFORM
+    
     mkdir $PACKAGE_STAGING_DIR
 
     stage-platform-files $PLATFORM $PACKAGE_STAGING_DIR $FILE_EXTENSION
@@ -42,6 +43,7 @@ function package {
     local ARCHIVE_NAME="$PACKAGE_STAGING_DIR.tar.gz"
     echo "Packaging into $ARCHIVE_NAME:"
     tar -czvf ./deploy/$ARCHIVE_NAME $PACKAGE_STAGING_DIR
+    rm -rf $PACKAGE_STAGING_DIR
 }
 
 # script start
@@ -61,6 +63,8 @@ rm -rf deploy $DEPLOY_STAGING_DIR
 mkdir deploy
 mkdir $DEPLOY_STAGING_DIR
 
-package linux
-package darwin
-package windows .exe
+package linux-amd64
+package darwin-amd64
+package windows-amd64 .exe
+package linux-s390x
+package linux-arm64

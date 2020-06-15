@@ -19,44 +19,23 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
-	"net/http"
 	"os"
-	"strconv"
-	"strings"
 
-	"github.com/gorilla/mux"
-	"github.com/rs/cors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/uber/jaeger-lib/metrics"
-	"github.com/uber/tchannel-go"
-	"github.com/uber/tchannel-go/thrift"
 	_ "go.uber.org/automaxprocs"
 	"go.uber.org/zap"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 
 	"github.com/jaegertracing/jaeger/cmd/collector/app"
-	"github.com/jaegertracing/jaeger/cmd/collector/app/builder"
-	"github.com/jaegertracing/jaeger/cmd/collector/app/grpcserver"
-	"github.com/jaegertracing/jaeger/cmd/collector/app/sampling"
-	"github.com/jaegertracing/jaeger/cmd/collector/app/sampling/strategystore"
-	"github.com/jaegertracing/jaeger/cmd/collector/app/zipkin"
 	"github.com/jaegertracing/jaeger/cmd/docs"
 	"github.com/jaegertracing/jaeger/cmd/env"
 	"github.com/jaegertracing/jaeger/cmd/flags"
-	clientcfgHandler "github.com/jaegertracing/jaeger/pkg/clientcfg/clientcfghttp"
 	"github.com/jaegertracing/jaeger/pkg/config"
-	"github.com/jaegertracing/jaeger/pkg/healthcheck"
-	"github.com/jaegertracing/jaeger/pkg/recoveryhandler"
 	"github.com/jaegertracing/jaeger/pkg/version"
 	ss "github.com/jaegertracing/jaeger/plugin/sampling/strategystore"
 	"github.com/jaegertracing/jaeger/plugin/storage"
 	"github.com/jaegertracing/jaeger/ports"
-	jc "github.com/jaegertracing/jaeger/thrift-gen/jaeger"
-	sc "github.com/jaegertracing/jaeger/thrift-gen/sampling"
-	zc "github.com/jaegertracing/jaeger/thrift-gen/zipkincore"
 )
 
 const serviceName = "jaeger-collector"
@@ -95,81 +74,36 @@ func main() {
 				logger.Fatal("Failed to create span writer", zap.Error(err))
 			}
 
-			builderOpts := new(builder.CollectorOptions).InitFromViper(v)
-			handlerBuilder := &builder.SpanHandlerBuilder{
-				SpanWriter:     spanWriter,
-				CollectorOpts:  *builderOpts,
+			strategyStoreFactory.InitFromViper(v)
+			if err := strategyStoreFactory.Initialize(metricsFactory, logger); err != nil {
+				logger.Fatal("Failed to init sampling strategy store factory", zap.Error(err))
+			}
+			strategyStore, err := strategyStoreFactory.CreateStrategyStore()
+			if err != nil {
+				logger.Fatal("Failed to create sampling strategy store", zap.Error(err))
+			}
+
+			c := app.New(&app.CollectorParams{
+				ServiceName:    serviceName,
 				Logger:         logger,
 				MetricsFactory: metricsFactory,
-			}
-
-			zipkinSpansHandler, jaegerBatchesHandler, grpcHandler := handlerBuilder.BuildHandlers()
-			strategyStoreFactory.InitFromViper(v)
-			strategyStore := initSamplingStrategyStore(strategyStoreFactory, metricsFactory, logger)
-
-			{
-				ch, err := tchannel.NewChannel(serviceName, &tchannel.ChannelOptions{})
-				if err != nil {
-					logger.Fatal("Unable to create new TChannel", zap.Error(err))
-				}
-				server := thrift.NewServer(ch)
-				batchHandler := app.NewTChannelHandler(jaegerBatchesHandler, zipkinSpansHandler)
-				server.Register(jc.NewTChanCollectorServer(batchHandler))
-				server.Register(zc.NewTChanZipkinCollectorServer(batchHandler))
-				server.Register(sc.NewTChanSamplingManagerServer(sampling.NewHandler(strategyStore)))
-				portStr := ":" + strconv.Itoa(builderOpts.CollectorPort)
-				listener, err := net.Listen("tcp", portStr)
-				if err != nil {
-					logger.Fatal("Unable to start listening on channel", zap.Error(err))
-				}
-				logger.Info("Starting jaeger-collector TChannel server", zap.Int("port", builderOpts.CollectorPort))
-				logger.Warn("TChannel has been deprecated and will be removed in a future release")
-				ch.Serve(listener)
-			}
-
-			server, err := startGRPCServer(builderOpts, grpcHandler, strategyStore, logger)
-			if err != nil {
-				logger.Fatal("Could not start gRPC collector", zap.Error(err))
-			}
-
-			{
-				r := mux.NewRouter()
-				apiHandler := app.NewAPIHandler(jaegerBatchesHandler)
-				apiHandler.RegisterRoutes(r)
-
-				cfgHandler := clientcfgHandler.NewHTTPHandler(clientcfgHandler.HTTPHandlerParams{
-					ConfigManager: &clientcfgHandler.ConfigManager{
-						SamplingStrategyStore: strategyStore,
-						// TODO provide baggage manager
-					},
-					MetricsFactory:         metricsFactory,
-					BasePath:               "/api",
-					LegacySamplingEndpoint: false,
-				})
-				cfgHandler.RegisterRoutes(r)
-
-				recoveryHandler := recoveryhandler.NewRecoveryHandler(logger, true)
-				httpHandler := recoveryHandler(r)
-
-				go startZipkinHTTPAPI(logger, builderOpts.CollectorZipkinHTTPPort, builderOpts.CollectorZipkinAllowedOrigins, builderOpts.CollectorZipkinAllowedHeaders, zipkinSpansHandler, recoveryHandler)
-
-				httpPortStr := ":" + strconv.Itoa(builderOpts.CollectorHTTPPort)
-				logger.Info("Starting jaeger-collector HTTP server", zap.String("http-host-port", httpPortStr))
-				go func() {
-					if err := http.ListenAndServe(httpPortStr, httpHandler); err != nil {
-						logger.Fatal("Could not launch service", zap.Error(err))
-					}
-					svc.HC().Set(healthcheck.Unavailable)
-				}()
-			}
+				SpanWriter:     spanWriter,
+				StrategyStore:  strategyStore,
+				HealthCheck:    svc.HC(),
+			})
+			collectorOpts := new(app.CollectorOptions).InitFromViper(v)
+			c.Start(collectorOpts)
 
 			svc.RunAndThen(func() {
 				if closer, ok := spanWriter.(io.Closer); ok {
-					server.GracefulStop()
 					err := closer.Close()
 					if err != nil {
-						logger.Error("Failed to close span writer", zap.Error(err))
+						logger.Error("failed to close span writer", zap.Error(err))
 					}
+				}
+
+				if err := c.Close(); err != nil {
+					logger.Error("failed to cleanly close the collector", zap.Error(err))
 				}
 			})
 			return nil
@@ -184,7 +118,7 @@ func main() {
 		v,
 		command,
 		svc.AddFlags,
-		builder.AddFlags,
+		app.AddFlags,
 		storageFactory.AddFlags,
 		strategyStoreFactory.AddFlags,
 	)
@@ -193,78 +127,4 @@ func main() {
 		fmt.Println(err.Error())
 		os.Exit(1)
 	}
-}
-
-func startGRPCServer(
-	opts *builder.CollectorOptions,
-	handler *app.GRPCHandler,
-	samplingStore strategystore.StrategyStore,
-	logger *zap.Logger,
-) (*grpc.Server, error) {
-	var server *grpc.Server
-
-	if opts.TLS.Enabled { // user requested a server with TLS, setup creds
-		tlsCfg, err := opts.TLS.Config()
-		if err != nil {
-			return nil, err
-		}
-
-		creds := credentials.NewTLS(tlsCfg)
-		server = grpc.NewServer(grpc.Creds(creds))
-	} else { // server without TLS
-		server = grpc.NewServer()
-	}
-	_, err := grpcserver.StartGRPCCollector(opts.CollectorGRPCPort, server, handler, samplingStore, logger, func(err error) {
-		logger.Fatal("gRPC collector failed", zap.Error(err))
-	})
-	if err != nil {
-		return nil, err
-	}
-	return server, err
-}
-
-func startZipkinHTTPAPI(
-	logger *zap.Logger,
-	zipkinPort int,
-	allowedOrigins string,
-	allowedHeaders string,
-	zipkinSpansHandler app.ZipkinSpansHandler,
-	recoveryHandler func(http.Handler) http.Handler,
-) {
-	if zipkinPort != 0 {
-		zHandler := zipkin.NewAPIHandler(zipkinSpansHandler)
-		r := mux.NewRouter()
-		zHandler.RegisterRoutes(r)
-
-		origins := strings.Split(strings.Replace(allowedOrigins, " ", "", -1), ",")
-		headers := strings.Split(strings.Replace(allowedHeaders, " ", "", -1), ",")
-
-		c := cors.New(cors.Options{
-			AllowedOrigins: origins,
-			AllowedMethods: []string{"POST"}, // Allowing only POST, because that's the only handled one
-			AllowedHeaders: headers,
-		})
-
-		httpPortStr := ":" + strconv.Itoa(zipkinPort)
-		logger.Info("Listening for Zipkin HTTP traffic", zap.Int("zipkin.http-port", zipkinPort))
-
-		if err := http.ListenAndServe(httpPortStr, c.Handler(recoveryHandler(r))); err != nil {
-			logger.Fatal("Could not launch service", zap.Error(err))
-		}
-	}
-}
-
-func initSamplingStrategyStore(
-	samplingStrategyStoreFactory *ss.Factory,
-	metricsFactory metrics.Factory,
-	logger *zap.Logger,
-) strategystore.StrategyStore {
-	if err := samplingStrategyStoreFactory.Initialize(metricsFactory, logger); err != nil {
-		logger.Fatal("Failed to init sampling strategy store factory", zap.Error(err))
-	}
-	strategyStore, err := samplingStrategyStoreFactory.CreateStrategyStore()
-	if err != nil {
-		logger.Fatal("Failed to create sampling strategy store", zap.Error(err))
-	}
-	return strategyStore
 }

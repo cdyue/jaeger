@@ -18,7 +18,7 @@ package config
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
+	"errors"
 	"io/ioutil"
 	"net/http"
 	"path/filepath"
@@ -28,51 +28,53 @@ import (
 	"time"
 
 	"github.com/olivere/elastic"
-	"github.com/pkg/errors"
 	"github.com/uber/jaeger-lib/metrics"
 	"go.uber.org/zap"
 
+	"github.com/jaegertracing/jaeger/pkg/config/tlscfg"
 	"github.com/jaegertracing/jaeger/pkg/es"
-	"github.com/jaegertracing/jaeger/pkg/es/wrapper"
+	eswrapper "github.com/jaegertracing/jaeger/pkg/es/wrapper"
 	"github.com/jaegertracing/jaeger/storage/spanstore"
 	storageMetrics "github.com/jaegertracing/jaeger/storage/spanstore/metrics"
 )
 
 // Configuration describes the configuration properties needed to connect to an ElasticSearch cluster
 type Configuration struct {
-	Servers               []string
-	Username              string
-	Password              string
-	TokenFilePath         string
-	AllowTokenFromContext bool
-	Sniffer               bool          // https://github.com/olivere/elastic/wiki/Sniffing
-	MaxNumSpans           int           // defines maximum number of spans to fetch from storage per query
-	MaxSpanAge            time.Duration `yaml:"max_span_age"` // configures the maximum lookback on span reads
-	NumShards             int64         `yaml:"shards"`
-	NumReplicas           int64         `yaml:"replicas"`
-	Timeout               time.Duration `validate:"min=500"`
-	BulkSize              int
-	BulkWorkers           int
-	BulkActions           int
-	BulkFlushInterval     time.Duration
-	IndexPrefix           string
-	TagsFilePath          string
-	AllTagsAsFields       bool
-	TagDotReplacement     string
-	Enabled               bool
-	TLS                   TLSConfig
-	UseReadWriteAliases   bool
-	CreateIndexTemplates  bool
-	Version               uint
+	Servers               []string       `mapstructure:"server_urls"`
+	Username              string         `mapstructure:"username"`
+	Password              string         `mapstructure:"password"`
+	TokenFilePath         string         `mapstructure:"token_file"`
+	AllowTokenFromContext bool           `mapstructure:"-"`
+	Sniffer               bool           `mapstructure:"sniffer"` // https://github.com/olivere/elastic/wiki/Sniffing
+	SnifferTLSEnabled     bool           `mapstructure:"sniffer_tls_enabled"`
+	MaxNumSpans           int            `mapstructure:"-"`                     // defines maximum number of spans to fetch from storage per query
+	MaxSpanAge            time.Duration  `yaml:"max_span_age" mapstructure:"-"` // configures the maximum lookback on span reads
+	NumShards             int64          `yaml:"shards" mapstructure:"num_shards"`
+	NumReplicas           int64          `yaml:"replicas" mapstructure:"num_replicas"`
+	Timeout               time.Duration  `validate:"min=500" mapstructure:"-"`
+	BulkSize              int            `mapstructure:"-"`
+	BulkWorkers           int            `mapstructure:"-"`
+	BulkActions           int            `mapstructure:"-"`
+	BulkFlushInterval     time.Duration  `mapstructure:"-"`
+	IndexPrefix           string         `mapstructure:"index_prefix"`
+	Tags                  TagsAsFields   `mapstructure:"tags_as_fields"`
+	Enabled               bool           `mapstructure:"-"`
+	TLS                   tlscfg.Options `mapstructure:"tls"`
+	UseReadWriteAliases   bool           `mapstructure:"use_aliases"`
+	CreateIndexTemplates  bool           `mapstructure:"create_mappings"`
+	Version               uint           `mapstructure:"version"`
 }
 
-// TLSConfig describes the configuration properties to connect tls enabled ElasticSearch cluster
-type TLSConfig struct {
-	Enabled        bool
-	SkipHostVerify bool
-	CertPath       string
-	KeyPath        string
-	CaPath         string
+// TagsAsFields holds configuration for tag schema.
+// By default Jaeger stores tags in an array of nested objects.
+// This configurations allows to store tags as object fields for better Kibana support.
+type TagsAsFields struct {
+	// Store all tags as object fields, instead nested objects
+	AllAsFields bool `mapstructure:"all"`
+	// Dot replacement for tag keys when stored as object fields
+	DotReplacement string `mapstructure:"dot_replacement"`
+	// File path to tag keys which should be stored as object fields
+	File string `mapstructure:"config_file"`
 }
 
 // ClientBuilder creates new es.Client
@@ -88,7 +90,7 @@ type ClientBuilder interface {
 	GetTagDotReplacement() string
 	GetUseReadWriteAliases() bool
 	GetTokenFilePath() string
-	IsEnabled() bool
+	IsStorageEnabled() bool
 	IsCreateIndexTemplates() bool
 	GetVersion() uint
 }
@@ -96,7 +98,7 @@ type ClientBuilder interface {
 // NewClient creates a new ElasticSearch client
 func (c *Configuration) NewClient(logger *zap.Logger, metricsFactory metrics.Factory) (es.Client, error) {
 	if len(c.Servers) < 1 {
-		return nil, errors.New("No servers specified")
+		return nil, errors.New("no servers specified")
 	}
 	options, err := c.getConfigOptions(logger)
 	if err != nil {
@@ -211,6 +213,9 @@ func (c *Configuration) ApplyDefaults(source *Configuration) {
 	if c.BulkFlushInterval == 0 {
 		c.BulkFlushInterval = source.BulkFlushInterval
 	}
+	if !c.SnifferTLSEnabled {
+		c.SnifferTLSEnabled = source.SnifferTLSEnabled
+	}
 }
 
 // GetNumShards returns number of shards from Configuration
@@ -240,12 +245,12 @@ func (c *Configuration) GetIndexPrefix() string {
 
 // GetTagsFilePath returns a path to file containing tag keys
 func (c *Configuration) GetTagsFilePath() string {
-	return c.TagsFilePath
+	return c.Tags.File
 }
 
 // GetAllTagsAsFields returns true if all tags should be stored as object fields
 func (c *Configuration) GetAllTagsAsFields() bool {
-	return c.AllTagsAsFields
+	return c.Tags.AllAsFields
 }
 
 // GetVersion returns Elasticsearch version
@@ -256,7 +261,7 @@ func (c *Configuration) GetVersion() uint {
 // GetTagDotReplacement returns character is used to replace dots in tag keys, when
 // the tag is stored as object field.
 func (c *Configuration) GetTagDotReplacement() string {
-	return c.TagDotReplacement
+	return c.Tags.DotReplacement
 }
 
 // GetUseReadWriteAliases indicates whether read alias should be used
@@ -269,8 +274,8 @@ func (c *Configuration) GetTokenFilePath() string {
 	return c.TokenFilePath
 }
 
-// IsEnabled determines whether storage is enabled
-func (c *Configuration) IsEnabled() bool {
+// IsStorageEnabled determines whether storage is enabled
+func (c *Configuration) IsStorageEnabled() bool {
 	return c.Enabled
 }
 
@@ -287,12 +292,15 @@ func (c *Configuration) getConfigOptions(logger *zap.Logger) ([]elastic.ClientOp
 		// we don' have a valid token to do the check ad if we don't disable the check the service that
 		// uses this won't start.
 		elastic.SetHealthcheck(!c.AllowTokenFromContext)}
+	if c.SnifferTLSEnabled {
+		options = append(options, elastic.SetScheme("https"))
+	}
 	httpClient := &http.Client{
 		Timeout: c.Timeout,
 	}
 	options = append(options, elastic.SetHttpClient(httpClient))
 	if c.TLS.Enabled {
-		ctlsConfig, err := c.TLS.createTLSConfig()
+		ctlsConfig, err := c.TLS.Config()
 		if err != nil {
 			return nil, err
 		}
@@ -305,13 +313,12 @@ func (c *Configuration) getConfigOptions(logger *zap.Logger) ([]elastic.ClientOp
 			// #nosec G402
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: c.TLS.SkipHostVerify},
 		}
-		if c.TLS.CaPath != "" {
-			ctls := &TLSConfig{CaPath: c.TLS.CaPath}
-			ca, err := ctls.loadCertificate()
+		if c.TLS.CAPath != "" {
+			config, err := c.TLS.Config()
 			if err != nil {
 				return nil, err
 			}
-			httpTransport.TLSClientConfig.RootCAs = ca
+			httpTransport.TLSClientConfig = config
 		}
 
 		token := ""
@@ -338,45 +345,6 @@ func (c *Configuration) getConfigOptions(logger *zap.Logger) ([]elastic.ClientOp
 		}
 	}
 	return options, nil
-}
-
-// createTLSConfig creates TLS Configuration to connect with ES Cluster.
-func (tlsConfig *TLSConfig) createTLSConfig() (*tls.Config, error) {
-	rootCerts, err := tlsConfig.loadCertificate()
-	if err != nil {
-		return nil, err
-	}
-	clientPrivateKey, err := tlsConfig.loadPrivateKey()
-	if err != nil {
-		return nil, err
-	}
-	// #nosec
-	return &tls.Config{
-		RootCAs:            rootCerts,
-		Certificates:       []tls.Certificate{*clientPrivateKey},
-		InsecureSkipVerify: tlsConfig.SkipHostVerify,
-	}, nil
-
-}
-
-// loadCertificate is used to load root certification
-func (tlsConfig *TLSConfig) loadCertificate() (*x509.CertPool, error) {
-	caCert, err := ioutil.ReadFile(tlsConfig.CaPath)
-	if err != nil {
-		return nil, err
-	}
-	certificates := x509.NewCertPool()
-	certificates.AppendCertsFromPEM(caCert)
-	return certificates, nil
-}
-
-// loadPrivateKey is used to load the private certificate and key for TLS
-func (tlsConfig *TLSConfig) loadPrivateKey() (*tls.Certificate, error) {
-	privateKey, err := tls.LoadX509KeyPair(tlsConfig.CertPath, tlsConfig.KeyPath)
-	if err != nil {
-		return nil, err
-	}
-	return &privateKey, nil
 }
 
 // TokenAuthTransport

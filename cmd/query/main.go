@@ -38,7 +38,6 @@ import (
 	"github.com/jaegertracing/jaeger/pkg/version"
 	"github.com/jaegertracing/jaeger/plugin/storage"
 	"github.com/jaegertracing/jaeger/ports"
-	istorage "github.com/jaegertracing/jaeger/storage"
 	"github.com/jaegertracing/jaeger/storage/spanstore"
 	storageMetrics "github.com/jaegertracing/jaeger/storage/spanstore/metrics"
 )
@@ -85,7 +84,7 @@ func main() {
 			}
 			defer closer.Close()
 			opentracing.SetGlobalTracer(tracer)
-			queryOpts := new(app.QueryOptions).InitFromViper(v)
+			queryOpts := new(app.QueryOptions).InitFromViper(v, logger)
 			// TODO: Need to figure out set enable/disable propagation on storage plugins.
 			v.Set(spanstore.StoragePropagationKey, queryOpts.BearerTokenPropagation)
 			storageFactory.InitFromViper(v)
@@ -101,13 +100,18 @@ func main() {
 			if err != nil {
 				logger.Fatal("Failed to create dependency reader", zap.Error(err))
 			}
-			queryServiceOptions := archiveOptions(storageFactory, logger)
+			queryServiceOptions := queryOpts.BuildQueryServiceOptions(storageFactory, logger)
 			queryService := querysvc.NewQueryService(
 				spanReader,
 				dependencyReader,
 				*queryServiceOptions)
 
-			server := app.NewServer(svc, queryService, queryOpts, tracer)
+			server := app.NewServer(svc.Logger, queryService, queryOpts, tracer)
+			go func() {
+				for s := range server.HealthCheckStatus() {
+					svc.SetHealthCheckStatus(s)
+				}
+			}()
 
 			if err := server.Start(); err != nil {
 				logger.Fatal("Could not start servers", zap.Error(err))
@@ -136,12 +140,4 @@ func main() {
 		fmt.Println(error.Error())
 		os.Exit(1)
 	}
-}
-
-func archiveOptions(storageFactory istorage.Factory, logger *zap.Logger) *querysvc.QueryServiceOptions {
-	opts := &querysvc.QueryServiceOptions{}
-	if !opts.InitArchiveStorage(storageFactory, logger) {
-		logger.Info("Archive storage not initialized")
-	}
-	return opts
 }
