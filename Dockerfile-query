@@ -1,0 +1,14 @@
+FROM docker-all.repo.ebaotech.com/golang:1.13.6-alpine3.11 as BUILD
+COPY . /app/
+WORKDIR /app/cmd/query/
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 installsuffix=cgo go build -mod=vendor -tags ui -o query /app/
+RUN apk add --update --no-cache ca-certificates
+RUN chmod +x /app/cmd/query/query
+
+FROM scratch
+
+COPY --from=BUILD /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+
+EXPOSE 16686
+COPY --from=BUILD /app/cmd/query/query /go/bin/
+ENTRYPOINT ["/go/bin/query"]
