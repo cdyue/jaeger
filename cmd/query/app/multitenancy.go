@@ -7,6 +7,7 @@ import (
 
 	"github.com/jaegertracing/jaeger/model"
 	ui "github.com/jaegertracing/jaeger/model/json"
+	"github.com/jaegertracing/jaeger/storage/spanstore"
 )
 
 //environment variable
@@ -23,11 +24,12 @@ func (aH *APIHandler) searchForMultitenancy(w http.ResponseWriter, r *http.Reque
 	}
 	//for multitenancy
 	if os.Getenv(envTenantCode) != "" && os.Getenv(envTenantTag) != "" {
+		searchTag := os.Getenv(envTenantTag)
 		tenantCode := strings.ToLower(r.Header.Get(os.Getenv(envTenantCode)))
 		adminTenantCode := strings.ToLower(r.Header.Get(os.Getenv(envAdminTenantCode)))
 
 		if tenantCode != "" && tenantCode != adminTenantCode {
-			tQuery.Tags[os.Getenv(envTenantTag)] = tenantCode
+			tQuery.Tags[searchTag] = tenantCode
 		}
 	}
 
@@ -56,6 +58,64 @@ func (aH *APIHandler) searchForMultitenancy(w http.ResponseWriter, r *http.Reque
 
 	structuredRes := structuredResponse{
 		Data:   uiTraces,
+		Errors: uiErrors,
+	}
+	aH.writeJSON(w, r, &structuredRes)
+}
+
+// getTraceFilter implements the REST API /traces/{trace-id}
+// It parses trace ID from the path, fetches the trace from QueryService,
+// formats it in the UI JSON format, and responds to the client.
+func (aH *APIHandler) getTraceFilter(w http.ResponseWriter, r *http.Request) {
+	traceID, ok := aH.parseTraceID(w, r)
+	if !ok {
+		return
+	}
+	trace, err := aH.queryService.GetTrace(r.Context(), traceID)
+	if err == spanstore.ErrTraceNotFound {
+		aH.handleError(w, err, http.StatusNotFound)
+		return
+	}
+	if aH.handleError(w, err, http.StatusInternalServerError) {
+		return
+	}
+
+	//for multitenancy
+	if os.Getenv(envTenantCode) != "" && os.Getenv(envTenantTag) != "" {
+		searchTag := os.Getenv(envTenantTag)
+		tenantCode := strings.ToLower(r.Header.Get(os.Getenv(envTenantCode)))
+		adminTenantCode := strings.ToLower(r.Header.Get(os.Getenv(envAdminTenantCode)))
+
+		if tenantCode != "" && tenantCode != adminTenantCode {
+			found := false
+			for _, v := range trace.GetSpans() {
+				if found {
+					break
+				}
+				for _, tagKeyVal := range v.GetTags() {
+					if searchTag == tagKeyVal.GetKey() && tenantCode == tagKeyVal.GetVStr() {
+						found = true
+						break
+					}
+				}
+			}
+			if !found {
+				aH.handleError(w, err, http.StatusNotFound)
+				return
+			}
+		}
+	}
+
+	var uiErrors []structuredError
+	uiTrace, uiErr := aH.convertModelToUI(trace, shouldAdjust(r))
+	if uiErr != nil {
+		uiErrors = append(uiErrors, *uiErr)
+	}
+
+	structuredRes := structuredResponse{
+		Data: []*ui.Trace{
+			uiTrace,
+		},
 		Errors: uiErrors,
 	}
 	aH.writeJSON(w, r, &structuredRes)

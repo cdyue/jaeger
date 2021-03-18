@@ -108,7 +108,7 @@ func NewAPIHandler(queryService *querysvc.QueryService, options ...HandlerOption
 
 // RegisterRoutes registers routes for this handler on the given router
 func (aH *APIHandler) RegisterRoutes(router *mux.Router) {
-	aH.handleFunc(router, aH.getTrace, "/traces/{%s}", traceIDParam).Methods(http.MethodGet)
+	aH.handleFunc(router, aH.getTraceFilter, "/traces/{%s}", traceIDParam).Methods(http.MethodGet)
 	aH.handleFunc(router, aH.archiveTrace, "/archive/{%s}", traceIDParam).Methods(http.MethodPost)
 	// aH.handleFunc(router, aH.search, "/traces").Methods(http.MethodGet)
 	aH.handleFunc(router, aH.searchForMultitenancy, "/traces").Methods(http.MethodGet)
