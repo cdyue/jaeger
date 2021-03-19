@@ -8,6 +8,7 @@ import (
 	"github.com/jaegertracing/jaeger/model"
 	ui "github.com/jaegertracing/jaeger/model/json"
 	"github.com/jaegertracing/jaeger/storage/spanstore"
+	"go.uber.org/zap"
 )
 
 //environment variable
@@ -26,9 +27,10 @@ func (aH *APIHandler) searchForMultitenancy(w http.ResponseWriter, r *http.Reque
 	if os.Getenv(envTenantCode) != "" && os.Getenv(envTenantTag) != "" {
 		searchTag := os.Getenv(envTenantTag)
 		tenantCode := strings.ToLower(r.Header.Get(os.Getenv(envTenantCode)))
-		adminTenantCode := strings.ToLower(r.Header.Get(os.Getenv(envAdminTenantCode)))
+		adminTenantCode := strings.ToLower(os.Getenv(envAdminTenantCode))
 
 		if tenantCode != "" && tenantCode != adminTenantCode {
+			aH.logger.Info("search by tenant", zap.String("tenant", tenantCode))
 			tQuery.Tags[searchTag] = tenantCode
 		}
 	}
@@ -84,9 +86,10 @@ func (aH *APIHandler) getTraceFilter(w http.ResponseWriter, r *http.Request) {
 	if os.Getenv(envTenantCode) != "" && os.Getenv(envTenantTag) != "" {
 		searchTag := os.Getenv(envTenantTag)
 		tenantCode := strings.ToLower(r.Header.Get(os.Getenv(envTenantCode)))
-		adminTenantCode := strings.ToLower(r.Header.Get(os.Getenv(envAdminTenantCode)))
+		adminTenantCode := strings.ToLower(os.Getenv(envAdminTenantCode))
 
 		if tenantCode != "" && tenantCode != adminTenantCode {
+			aH.logger.Info("search by tenant", zap.String("tenant", tenantCode))
 			found := false
 			for _, v := range trace.GetSpans() {
 				if found {
